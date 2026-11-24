@@ -11,8 +11,6 @@
 <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Reem+Kufi:wght@500;700&display=swap">
 <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600&family=Reem+Kufi:wght@500;700&display=swap"></noscript>
 <style>
-/* Layout: one column phone app. Sticky top bar, source filter chips, a list of sheet cards;
-   tapping a card opens its rows as a flat list; a floating button opens the upload panel. */
 :root{
   --bg:#EEF1F0; --surface:#FFFFFF; --ink:#13201E; --muted:#5B6A67; --line:#D8DFDD;
   --accent:#1F3FBF; --accent-ink:#FFFFFF; --accent-soft:#E3E8FB;
@@ -129,8 +127,6 @@ textarea.in{min-height:44px;resize:vertical}
   padding:10px 16px;border-radius:10px;font-size:14px;max-width:calc(100% - 32px)}
 .warn{background:var(--pend-soft);color:var(--pend);border-radius:10px;padding:10px 12px;font-size:14px;margin-block:10px}
 </style>
-
-
 </head>
 <body>
 <div id="app" dir="rtl" lang="ar">
@@ -138,7 +134,6 @@ textarea.in{min-height:44px;resize:vertical}
     <header class="top">
       <button class="back" id="back" hidden aria-label="رجوع">›</button>
       <h1 id="ttl">مسار</h1>
-      <button class="btn" id="btnAll" hidden>تنزيل الكل</button>
     </header>
     <main id="view"><p class="note">بحمّل...</p></main>
   </div>
@@ -226,16 +221,22 @@ async function removeGroup(g) {
   for (let i = 0; i < g.chunks; i++) await S.db.doc(`rows/${g.id}_${i}`).delete();
   await S.db.doc(`groups/${g.id}`).delete();
 }
+async function removeAll() {
+  for (const g of S.groups.slice()) await removeGroup(g);
+}
 
 /* ---------- home ---------- */
 function sources() { return [...new Set(S.groups.map(g => g.source))]; }
 function renderHome() {
-  const ss = sources();
   $("#view").innerHTML = `
     <p class="note" style="margin-block:12px 0">${esc(TAGLINE)}</p>
     <div class="summary" id="sum"></div>
+    <div class="actions" id="homeActions">
+      <button class="btn primary" id="dlAll">تنزيل كل الشيتات</button>
+      <button class="btn danger" id="delAll">حذف كل الملفات</button>
+    </div>
     <div class="chips" id="srcChips"></div>
-    <input class="search" id="q" type="search" placeholder="ابحث باسم القسم" value="${esc(S.q)}" autocomplete="off">
+    <input class="search" id="q" type="search" placeholder="فلترة باسم المحافظة" value="${esc(S.q)}" autocomplete="off">
     <div id="list"></div>
     <div class="actions" style="margin-top:24px"><button class="btn" id="bkp">حفظ نسخة احتياطية</button><label class="btn" for="rst" style="display:inline-flex;align-items:center">استرجاع نسخة</label><input id="rst" type="file" accept=".json" hidden></div>
     <p class="note">البيانات محفوظة على الجهاز ده. خد نسخة احتياطية من وقت للتاني.</p>`;
@@ -247,9 +248,11 @@ function updateHome() {
   const all = S.groups, shown = all.filter(g => (S.src === "all" || g.source === S.src) && (!S.q || norm(g.name).includes(norm(S.q))));
   let rows = 0, coll = 0;
   for (const g of all) { const s = stats(g); rows += s.n; coll += s.coll; }
-  $("#sum").innerHTML = `<div class="sum"><b class="num">${all.length}</b><span>قسم</span></div>
+  $("#sum").innerHTML = `<div class="sum"><b class="num">${all.length}</b><span>محافظة / قسم</span></div>
     <div class="sum"><b class="num">${money(rows)}</b><span>صف</span></div>
     <div class="sum"><b class="num">${money(coll)}</b><span>تم تحصيله (ج)</span></div>`;
+  const ha = $("#homeActions"); if (ha) ha.hidden = !all.length || !S.ready;
+  const da = $("#delAll"); if (da && S.armed !== "all") { da.textContent = "حذف كل الملفات"; da.classList.remove("armed"); }
   const ss = sources();
   $("#srcChips").innerHTML = ss.length > 1 ? [["all", "الكل"], ...ss.map(s => [s, s])].map(([k, l]) =>
     `<button class="chip" data-src="${esc(k)}" aria-pressed="${S.src === k}">${esc(l)}</button>`).join("") : "";
@@ -258,7 +261,7 @@ function updateHome() {
   if (!all.length) {
     L.innerHTML = `<div class="empty"><h2>لسه مفيش أقسام</h2><p>اضغط "إضافة ملف"، اختار ملف الإكسل واكتب اسم المصدر (قنا أو الأقصر)، والنظام يقسم الصفوف حسب عمود المحافظه.</p></div>`; return;
   }
-  if (!shown.length) { L.innerHTML = `<div class="empty"><p>مفيش قسم بالاسم ده.</p></div>`; return; }
+  if (!shown.length) { L.innerHTML = `<div class="empty"><p>مفيش محافظة بالاسم ده.</p></div>`; return; }
   L.innerHTML = `<div class="cards">${shown.map(g => {
     const s = stats(g), t = Math.max(1, s.got + s.pend + s.ret + s.other);
     const w = k => (s[k] / t * 100).toFixed(1) + "%";
@@ -361,9 +364,9 @@ function openEditor(g, idx) {
 }
 
 /* ---------- upload ---------- */
-const U = { wb: null, name: "", sheet: "", aoa: [], hrow: 0, headers: [], gcol: 0, groups: [], skipped: 0, source: "", mode: "append", busy: false, err: "" };
+const U = { wb: null, name: "", sheet: "", aoa: [], hrow: 0, headers: [], gcol: -1, groups: [], skipped: 0, source: "", mode: "append", busy: false, err: "" };
 function openUpload() {
-  Object.assign(U, { wb: null, name: "", sheet: "", aoa: [], headers: [], groups: [], skipped: 0, source: "", mode: "append", busy: false, err: "" });
+  Object.assign(U, { wb: null, name: "", sheet: "", aoa: [], headers: [], gcol: -1, groups: [], skipped: 0, source: "", mode: "append", busy: false, err: "" });
   const P = $("#panel"); P.hidden = false; P.scrollTop = 0;
   const known = sources(); const base = [...new Set(["قنا", "الأقصر", ...known])];
   P.innerHTML = `<div class="wrap"><div class="head"><button class="back" data-close aria-label="إغلاق">›</button><h2>إضافة ملف</h2></div>
@@ -388,7 +391,6 @@ function openUpload() {
   };
   P.onchange = e => {
     if (e.target.id === "sheetSel") { U.sheet = e.target.value; analyze(); renderUpBody(); }
-    if (e.target.id === "colSel") { U.gcol = Number(e.target.value); regroup(); renderUpBody(); }
     if (e.target.name === "mode") { U.mode = e.target.value; }
   };
   renderUpBody();
@@ -402,12 +404,13 @@ function analyze() {
   const hr = U.aoa[U.hrow] || [];
   let w = hr.length; while (w > 0 && clean(hr[w - 1]) === "") w--;
   U.headers = hr.slice(0, w).map((x, i) => clean(x) || "عمود " + (i + 1));
-  const gi = U.headers.findIndex(x => /المحافظ/.test(norm(x)));
-  U.gcol = gi >= 0 ? gi : 0;
+  // التقسيم والفلترة على عمود المحافظة فقط
+  U.gcol = U.headers.findIndex(x => /المحافظ/.test(norm(x)));
   regroup();
 }
 function regroup() {
   const map = new Map(); let skipped = 0; const w = U.headers.length;
+  if (U.gcol < 0) { U.groups = []; U.skipped = 0; return; }
   const sn = cols(U.headers).sn;
   for (const raw of U.aoa.slice(U.hrow + 1)) {
     const r = Array.from({ length: w }, (_, i) => typeof raw[i] === "string" ? raw[i].trim() : (raw[i] ?? ""));
@@ -421,16 +424,16 @@ function regroup() {
 function renderUpBody() {
   const B = $("#upBody"); if (!B) return;
   if (U.err) { B.innerHTML = `<div class="warn">${esc(U.err)}</div>`; return; }
-  if (!U.wb) { B.innerHTML = `<p class="note">بعد ما تختار الملف هتشوف الأقسام اللي هتتعمل قبل الحفظ.</p>`; return; }
+  if (!U.wb) { B.innerHTML = `<p class="note">بعد ما تختار الملف هتشوف المحافظات اللي هتتعمل قبل الحفظ.</p>`; return; }
   const total = U.groups.reduce((a, g) => a + g.rows.length, 0);
   const dups = U.groups.filter(g => S.groups.some(x => x.name === g.name && x.source === U.source));
   B.innerHTML = `
     ${U.wb.SheetNames.length > 1 ? `<div class="field"><label for="sheetSel">الشيت اللي هيتقرا</label><select class="in" id="sheetSel">${U.wb.SheetNames.map(n => `<option ${n === U.sheet ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>` : ""}
-    <div class="field"><label for="colSel">العمود اللي بيتقسم عليه</label><select class="in" id="colSel">${U.headers.map((h, i) => `<option value="${i}" ${i === U.gcol ? "selected" : ""}>${esc(h)}</option>`).join("")}</select></div>
-    ${U.groups.length ? `<div class="lbl">هيتعمل ${U.groups.length} قسم من ${total} صف</div>
+    ${U.gcol < 0 ? `<div class="warn">مفيش عمود اسمه "المحافظة" في الشيت ده. اتأكد من الشيت أو اختار شيت تاني.</div>`
+    : U.groups.length ? `<div class="lbl">التقسيم حسب عمود "${esc(U.headers[U.gcol])}": هيتعمل ${U.groups.length} قسم من ${total} صف</div>
     <div class="plist num">${U.groups.map(g => `<div><b>${esc(g.name)}${U.source ? ` - ${esc(U.source)}` : ""}</b>${S.groups.some(x => x.name === g.name && x.source === U.source) ? `<span class="dup">موجود</span>` : ""}<small>${g.rows.length} صف</small></div>`).join("")}</div>`
-      : `<div class="warn">مفيش قيم في العمود ده. جرّب تختار عمود تاني.</div>`}
-    ${U.skipped ? `<p class="note">${U.skipped} صف فيهم بيانات بس من غير قيمة في العمود ده، ومش هيتضافوا.</p>` : ""}
+      : `<div class="warn">عمود المحافظة فاضي في الشيت ده.</div>`}
+    ${U.skipped ? `<p class="note">${U.skipped} صف فيهم بيانات بس من غير محافظة، ومش هيتضافوا.</p>` : ""}
     ${dups.length ? `<div class="field"><span class="lbl">${dups.length} قسم موجود بنفس الاسم والمصدر</span><div class="radios">
       <label><input type="radio" name="mode" value="append" ${U.mode === "append" ? "checked" : ""}> ضيف الصفوف على القسم الموجود</label>
       <label><input type="radio" name="mode" value="replace" ${U.mode === "replace" ? "checked" : ""}> استبدل القسم الموجود بالجديد</label></div></div>` : ""}
@@ -478,14 +481,13 @@ async function exportAll() {
     while (used.has(n.toLowerCase())) n = n.slice(0, 28) + " " + k++;
     used.add(n.toLowerCase()); XLSX.utils.book_append_sheet(wb, sheetOf(g), n);
   }
-  return saveWb(wb, "كل الأقسام.xlsx");
+  return saveWb(wb, "كل الشيتات.xlsx");
 }
 
 /* ---------- routing & events ---------- */
 function route() {
   const g = curGroup(), inD = /^#sheet-/.test(location.hash);
   $("#back").hidden = !inD; $("#fab").hidden = inD || !S.canWrite || !S.db;
-  $("#btnAll").hidden = inD || !S.groups.length || !S.dl;
   S.armed = ""; S.dq = ""; S.dstat = "all"; S.limit = 120;
   window.scrollTo(0, 0);
   if (inD) {
@@ -495,13 +497,11 @@ function route() {
 }
 function refresh() {
   const g = curGroup(), inD = /^#sheet-/.test(location.hash);
-  $("#btnAll").hidden = inD || !S.groups.length || !S.dl;
   if (inD) { if (g) { if ($("#rows")) updateDetail(g); else route(); } else route(); } else updateHome();
 }
 window.addEventListener("hashchange", route);
 $("#back").onclick = () => { location.hash = ""; };
 $("#fab").onclick = openUpload;
-$("#btnAll").onclick = exportAll;
 $("#view").addEventListener("click", e => {
   const t = e.target.closest("button"); if (!t) return;
   if (t.dataset.src != null) { S.src = t.dataset.src; updateHome(); }
@@ -510,6 +510,12 @@ $("#view").addEventListener("click", e => {
   else if (t.dataset.i != null) { openEditor(curGroup(), Number(t.dataset.i)); }
   else if (t.id === "more") { S.limit += 120; updateDetail(curGroup()); }
   else if (t.id === "dl") exportOne(curGroup());
+  else if (t.id === "dlAll") exportAll();
+  else if (t.id === "delAll") {
+    if (S.armed !== "all") { S.armed = "all"; t.textContent = "اضغط تاني لحذف كل الملفات"; t.classList.add("armed"); return; }
+    S.armed = ""; t.disabled = true;
+    removeAll().then(() => { t.disabled = false; S.src = "all"; toast("اتحذفت كل الملفات"); }).catch(() => { t.disabled = false; toast("ما اتحذفتش"); });
+  }
   else if (t.id === "addRow") openEditor(curGroup(), -1);
   else if (t.id === "delG") {
     if (S.armed !== "g") { S.armed = "g"; t.textContent = "اضغط تاني لحذف القسم كله"; t.classList.add("armed"); return; }
@@ -593,6 +599,5 @@ route();
   });
 })();
 </script>
-
 </body>
 </html>
